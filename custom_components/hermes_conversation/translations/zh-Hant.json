@@ -1,0 +1,27 @@
+{
+  "title": "Hermes 對話",
+  "config": {
+    "step": {
+      "user": {
+        "title": "連接 Hermes Agent",
+        "description": "設定 Home Assistant 使用嘅 Hermes API Server。",
+        "data": {
+          "name": "名稱",
+          "api_url": "Hermes API URL",
+          "api_key": "API key",
+          "model": "模型",
+          "timeout": "逾時秒數",
+          "continue_mode": "連續對話模式"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "無法連接 Hermes",
+      "invalid_auth": "API key 無效",
+      "unknown": "發生未預期錯誤"
+    },
+    "abort": {
+      "already_configured": "呢個 Hermes API URL 已經設定"
+    }
+  }
+}
