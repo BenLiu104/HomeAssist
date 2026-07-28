@@ -1,0 +1,27 @@
+{
+  "title": "Hermes Conversation",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Hermes Agent",
+        "description": "Configure the Hermes API server used by Home Assistant.",
+        "data": {
+          "name": "Name",
+          "api_url": "Hermes API URL",
+          "api_key": "API key",
+          "model": "Model",
+          "timeout": "Timeout in seconds",
+          "continue_mode": "Continue conversation mode"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to Hermes",
+      "invalid_auth": "Invalid API key",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This Hermes API URL is already configured"
+    }
+  }
+}
