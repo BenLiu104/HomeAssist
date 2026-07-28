@@ -1,0 +1,12 @@
+.env
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+config/*
+!config/.gitkeep
+*.log
+*.db
+*.sqlite
+*.sqlite3
