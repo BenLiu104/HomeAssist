@@ -166,7 +166,7 @@ class HermesConversationEntity(ConversationEntity):
         conversation_id: str,
         language: str,
     ) -> str:
-        """Call Hermes's OpenAI-compatible chat completions endpoint."""
+        """Call Hermes's stateful OpenAI Responses-compatible endpoint."""
         session = async_get_clientsession(self.hass)
         api_url = self._entry.data[CONF_API_URL].rstrip("/")
         timeout_seconds = int(self._entry.data[CONF_TIMEOUT])
@@ -174,25 +174,23 @@ class HermesConversationEntity(ConversationEntity):
         headers = {
             "Authorization": f"Bearer {self._entry.data[CONF_API_KEY]}",
             "Content-Type": "application/json",
-            "X-Hermes-Session-Id": conversation_id,
-            "X-Hermes-Session-Key": f"home-assistant:{conversation_id}",
+            # Stable memory scope for this HA integration. This is separate
+            # from the per-conversation transcript chain below.
+            "X-Hermes-Session-Key": f"home-assistant:{self._entry.entry_id}",
         }
         payload = {
             "model": self._entry.data[CONF_MODEL],
+            "input": text,
+            "instructions": f"{_SYSTEM_INSTRUCTION}\nUser language: {language}",
+            "conversation": f"home-assistant:{conversation_id}",
+            "store": True,
             "stream": False,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": f"{_SYSTEM_INSTRUCTION}\nUser language: {language}",
-                },
-                {"role": "user", "content": text},
-            ],
         }
 
         try:
             async with asyncio.timeout(timeout_seconds):
                 async with session.post(
-                    f"{api_url}/v1/chat/completions",
+                    f"{api_url}/v1/responses",
                     headers=headers,
                     json=payload,
                 ) as response:
@@ -211,14 +209,35 @@ class HermesConversationEntity(ConversationEntity):
         except (aiohttp.ClientError, ValueError) as err:
             raise HermesConnectionError(str(err)) from err
 
-        try:
-            content = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as err:
-            raise HermesResponseError("Missing choices[0].message.content") from err
+        return extract_response_text(data)
 
-        if not isinstance(content, str):
-            raise HermesResponseError("Message content is not text")
-        return content
+
+def extract_response_text(data: dict[str, Any]) -> str:
+    """Extract assistant output_text parts from a Responses API payload."""
+    output = data.get("output")
+    if not isinstance(output, list):
+        raise HermesResponseError("Missing response output list")
+
+    text_parts: list[str] = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        if item.get("role") != "assistant":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") != "output_text":
+                continue
+            text = part.get("text")
+            if isinstance(text, str):
+                text_parts.append(text)
+
+    result = "".join(text_parts).strip()
+    if not result:
+        raise HermesResponseError("No assistant output_text found")
+    return result
 
 
 def parse_continue_marker(text: str) -> tuple[str, bool | None]:
