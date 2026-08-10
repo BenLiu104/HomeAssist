@@ -9,3 +9,13 @@ services:
       TZ: ${TZ:-America/Vancouver}
     volumes:
       - ./config:/config
+
+  sensevoice-wyoming:
+    image: ghcr.io/benliu104/sensevoice-wyoming:sha-d9e04e2
+    container_name: sensevoice-wyoming
+    restart: unless-stopped
+    ports:
+      - "10300:10300"
+    environment:
+      SENSEVOICE_LANG: yue
+      SENSEVOICE_LANGUAGE_MODE: force
