@@ -14,12 +14,16 @@ Initial deployment:
 
 ## 2. Goals
 
-1. Forward every final STT transcript from a selected Home Assistant Assist pipeline to Hermes.
+1. Forward final STT transcripts from a selected Home Assistant Assist pipeline
+   to Hermes, except adapter-local session control utterances.
 2. Return Hermes's final text response to Home Assistant for TTS playback on Voice PE.
-3. Preserve multi-turn context, including Hermes tool calls and tool outputs.
+3. Preserve multi-turn context across immediate follow-ups and later wake words,
+   including Hermes tool calls and tool outputs.
 4. Keep the Home Assistant integration thin; reasoning, tools, skills, and memory remain in Hermes.
 5. Avoid exposing the Hermes API to the public Internet.
 6. Keep Home Assistant configuration portable between macOS and Raspberry Pi.
+7. Keep spoken output concise and safe for a voice-only interface while allowing
+   deliberately enabled Home Assistant, web-research, and memory tools.
 
 ## 3. Non-goals for MVP
 
@@ -92,6 +96,9 @@ Hermes shall:
 - Persist the Responses API chain for each named conversation.
 - Return structured Responses API output items.
 - Return one final user-facing assistant message.
+- Keep the Home Assistant profile tool allowlist separate from the adapter.
+  The intended profile allows Home Assistant, web, and memory tools; it does
+  not require terminal, file-system, or browser-automation tools.
 - Follow the adapter instruction to append exactly one non-spoken marker:
 
 ```xml
@@ -110,9 +117,9 @@ The adapter shall:
 
 1. Implement a Home Assistant `ConversationEntity`.
 2. Receive `ConversationInput.text`.
-3. Reuse `ConversationInput.conversation_id` when present.
-4. Generate a UUID when no Home Assistant conversation ID is supplied.
-5. Build the Hermes named conversation as `home-assistant:<conversation_id>`.
+3. Resolve a stable scope from Home Assistant user, satellite, or device identity.
+4. Map short Home Assistant interactions onto a persisted working session.
+5. Build an opaque Hermes named conversation scoped to the integration and user.
 6. Authenticate using `Authorization: Bearer <API_SERVER_KEY>`.
 7. Call `POST /v1/responses`.
 8. Send only the current transcript as `input`.
@@ -125,6 +132,8 @@ The adapter shall:
 15. Return the same Home Assistant conversation ID.
 16. Set `continue_conversation` from the explicit marker or configured fallback.
 17. Surface timeout, authentication, connection, and malformed-response errors safely.
+18. Serialize same-scope requests so two overlapping utterances cannot reorder
+    the persisted Hermes conversation chain.
 
 ## 9. Request contract
 
@@ -132,7 +141,7 @@ The adapter shall:
 POST /v1/responses
 Authorization: Bearer <API_SERVER_KEY>
 Content-Type: application/json
-X-Hermes-Session-Key: home-assistant:<integration-entry-id>
+X-Hermes-Session-Key: home-assistant:<integration-entry-id>:<scope-hash>
 ```
 
 Example body:
@@ -142,13 +151,13 @@ Example body:
   "model": "hermes-agent",
   "input": "幫我睇下聽日天氣。",
   "instructions": "You are replying through a Home Assistant voice assistant...",
-  "conversation": "home-assistant:ha-conversation-id",
+  "conversation": "home-assistant:entry-id:scope-hash:session-uuid",
   "store": true,
   "stream": false
 }
 ```
 
-The `conversation` value controls short-term transcript continuity. `X-Hermes-Session-Key` is a separate stable scope used by Hermes long-term-memory providers and must not be confused with the conversation chain.
+The `conversation` value controls working transcript continuity. `X-Hermes-Session-Key` is a separate stable, opaque scope used by Hermes long-term-memory providers and must not be confused with the conversation chain.
 
 ## 10. Response contract
 
@@ -193,13 +202,27 @@ Spoken result:
 
 ## 11. Session rules
 
-- Same Home Assistant `conversation_id` means the same Hermes named conversation.
-- Missing Home Assistant ID creates a new UUID.
-- The adapter must not infer continuity from device ID or elapsed time alone.
-- Hermes owns and reconstructs the stored transcript, tool calls, and tool results.
-- Home Assistant chat log is used for UI consistency, not as Hermes's primary memory store.
-- The adapter does not need a local `previous_response_id` database for the MVP.
-- A new wake-word activation may receive a new Home Assistant conversation ID; the adapter follows Home Assistant's ID rather than guessing.
+There are three separate continuity mechanisms:
+
+1. `<ha_continue>` controls whether Assist immediately reopens the microphone.
+2. A persisted working session selects the Hermes named conversation across wake words.
+3. Hermes durable memory stores only explicit memories and stable preferences.
+
+Working-session rules:
+
+- Scope priority is Home Assistant user, then satellite, then device, then a default scope.
+- A normal session remains active for 10 minutes after the latest turn.
+- A pinned cooking, guided, or research session remains active for 2 hours.
+- Expiry starts a new named conversation while retaining the previous one for resume.
+- `開始新話題` / `新話題` starts a fresh normal session.
+- `繼續頭先` / `繼續之前個話題` restores the previous session.
+- `結束呢個話題` / `結束對話` closes the active session.
+- `開始研究模式` and `開始煮餸模式` start a fresh pinned session.
+- Hermes may return a non-spoken `<ha_session>pin|release|unchanged</ha_session>`
+  directive for naturally phrased multi-step tasks.
+- The routing map is persisted in Home Assistant storage and survives restarts.
+- Hermes remains the owner of transcript, tool-call, and tool-result contents.
+- Home Assistant chat log remains for UI consistency, not primary memory storage.
 
 ## 12. Continue modes
 
@@ -229,6 +252,13 @@ Always return `continue_conversation=false`.
 - The adapter must impose a timeout.
 - Logs must not print bearer tokens.
 - The API Server exposes Hermes's full toolset, including terminal operations; possession of the API key is highly privileged.
+- The Home Assistant Hermes profile shall enable only its required tools:
+  Home Assistant, web research, and durable memory. Its tool configuration and
+  SOUL prompt are external profile data, not custom-component configuration.
+- Web pages and all tool results are untrusted data. Only the user's direct
+  utterance may authorize a Home Assistant action or a durable-memory write.
+- A web-search provider key (such as Tavily) belongs in the private Hermes
+  profile environment and must not be committed.
 
 ## 14. Configuration fields
 
@@ -242,14 +272,35 @@ Always return `continue_conversation=false`.
 
 A bare `model` value sent to OpenAI-compatible endpoints may be ignored unless Hermes direct model requests are enabled or a configured model route matches. Explicit `provider` and model-routing support are outside the MVP configuration UI.
 
-## 15. Health checks
+## 15. TTS runtime configuration
+
+STT and TTS providers are Home Assistant runtime configuration, not code owned
+by this custom component. The current deployment uses SenseVoice through a
+Wyoming endpoint for Cantonese STT and optionally uses the community Edge TTS
+integration for output.
+
+```text
+config/custom_components/edge_tts/     # local, ignored by Git
+Voice: zh-HK-HiuMaanNeural
+Rate: +25%
+```
+
+The Assist pipeline selects the Edge TTS engine and language. The Edge TTS
+integration's options select the neural voice and rate. The local component
+has a small extension that adds a persisted `rate` option; manual replacement
+or upgrade of that community component may require reapplying the extension.
+
+Edge TTS uses Microsoft-hosted synthesis. It does not need an API key, but it
+is not local-only and requires Internet access.
+
+## 16. Health checks
 
 - `GET /health` is the cheap public liveness check and returns `{"status":"ok"}`.
 - `GET /v1/health` is an alias for OpenAI-compatible clients.
 - `GET /health/detailed` is the authenticated readiness check.
 - Setup validation may use `/health`; future diagnostics should use `/health/detailed`.
 
-## 16. Error behavior
+## 17. Error behavior
 
 | Failure | User-facing behavior |
 |---|---|
@@ -260,7 +311,7 @@ A bare `model` value sent to OpenAI-compatible endpoints may be ignored unless H
 | Missing `output` | Spoken invalid-response error |
 | No assistant `output_text` | Spoken empty/invalid-response error |
 
-## 17. Deployment
+## 18. Deployment
 
 ### macOS MVP
 
@@ -283,25 +334,38 @@ Raspberry Pi OS 64-bit
 
 The exact API URL depends on Docker network mode and Hermes bind address. Do not assume that `127.0.0.1` inside a bridged container means the Linux host.
 
-## 18. Acceptance criteria
+## 19. Acceptance criteria
 
 - The custom integration appears in Add Integration.
 - Setup validates Hermes liveness.
 - A typed Assist message reaches `/v1/responses` and returns speech.
 - A Voice PE transcript reaches Hermes and is spoken through Voice PE.
-- Two turns with the same Home Assistant conversation ID retain Hermes context.
+- Turns inside the same working session retain Hermes context.
 - Previous Hermes tool calls remain available on follow-up turns.
 - The control marker is never spoken.
+- The session marker is never spoken.
 - Function-call output items are never accidentally read aloud.
+- A second wake word within 10 minutes resumes the same working session.
+- A normal session expires after 10 minutes and can be restored with `繼續頭先`.
+- A pinned cooking or research session remains active for up to 2 hours.
+- Session routing survives a Home Assistant restart.
+- Hermes can use Home Assistant, web search, and durable memory tools from the API profile.
+- The voice response contains no reasoning, tool traces, `<ha_session>`, or
+  `<ha_continue>` markers.
+- A configured Edge TTS engine can generate Cantonese output at the selected
+  integration voice and rate.
 - Restarting Home Assistant does not delete its configuration.
 - Migration to Raspberry Pi requires only host/network endpoint adjustments and native Hermes reinstallation.
 
-## 19. Future phases
+## 20. Future phases
 
-1. Add Home Assistant control tools with an explicit allowlist.
+1. Add an adapter-owned Home Assistant entity allowlist and action policy.
 2. Add Hermes Runs API support for long tasks, SSE progress, cancellation, and approvals.
 3. Add streaming response support.
-4. Add configurable stable memory scope for multiple people or rooms.
+4. Add speaker identification for true multi-person memory scopes.
 5. Add automated Home Assistant integration tests.
 6. Add detailed health and latency sensors.
-7. Add session reset and conversation deletion controls.
+7. Add a UI for changing session timeouts and deleting stored response chains.
+8. Add a separately scoped remote-control profile over Tailscale, with ACLs,
+   sender allowlists, and confirmation for sensitive actions. Do not expose the
+   Home Assistant or Hermes API directly to the public Internet.

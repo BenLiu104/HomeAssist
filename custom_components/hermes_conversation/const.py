@@ -14,6 +14,9 @@ CONF_CONTINUE_MODE: Final = "continue_mode"
 DEFAULT_API_URL: Final = "http://host.docker.internal:8642"
 DEFAULT_MODEL: Final = "hermes-agent"
 DEFAULT_TIMEOUT: Final = 180
+DEFAULT_SESSION_TTL_MINUTES: Final = 10
+DEFAULT_PINNED_SESSION_TTL_HOURS: Final = 2
+SESSION_STORE_VERSION: Final = 1
 
 CONTINUE_AUTO: Final = "auto"
 CONTINUE_ALWAYS: Final = "always"
