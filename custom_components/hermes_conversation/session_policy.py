@@ -7,6 +7,7 @@ conversation chains; Home Assistant storage and transport stay outside it.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import hashlib
@@ -15,10 +16,11 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import uuid
 
 
-_SESSION_DIRECTIVE_RE = re.compile(
-    r"\s*<ha_session>\s*(pin|release|unchanged)\s*</ha_session>\s*",
-    flags=re.IGNORECASE,
+_SESSION_TAG_RE = re.compile(
+    r"\s*<ha_session\b[^>]*>(.*?)</ha_session>\s*",
+    flags=re.IGNORECASE | re.DOTALL,
 )
+_SESSION_DIRECTIVES = ("pin", "release", "unchanged")
 
 _NEW_COMMANDS = ("開始新話題", "新話題")
 _RESUME_COMMANDS = ("繼續頭先", "繼續之前個話題", "繼續上一個話題")
@@ -203,11 +205,26 @@ class SessionPolicy:
         return scopes
 
 
+class ScopeLockPool:
+    """Provide one lock per stable scope to preserve transcript ordering."""
+
+    def __init__(self) -> None:
+        self._locks: Dict[str, asyncio.Lock] = {}
+
+    def for_scope(self, scope: str) -> asyncio.Lock:
+        """Return the shared lock for a user, satellite, or device scope."""
+        return self._locks.setdefault(scope, asyncio.Lock())
+
+
 def parse_session_directive(text: str) -> Tuple[str, Optional[str]]:
     """Strip the last Hermes session marker and return its directive."""
-    matches = list(_SESSION_DIRECTIVE_RE.finditer(text))
-    directive = matches[-1].group(1).lower() if matches else None
-    return _SESSION_DIRECTIVE_RE.sub("", text).strip(), directive
+    matches = list(_SESSION_TAG_RE.finditer(text))
+    directive = None
+    if matches:
+        candidate = matches[-1].group(1).strip().lower()
+        if candidate in _SESSION_DIRECTIVES:
+            directive = candidate
+    return _SESSION_TAG_RE.sub("", text).strip(), directive
 
 
 def _normalize(text: str) -> str:

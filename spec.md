@@ -14,7 +14,8 @@ Initial deployment:
 
 ## 2. Goals
 
-1. Forward every final STT transcript from a selected Home Assistant Assist pipeline to Hermes.
+1. Forward final STT transcripts from a selected Home Assistant Assist pipeline
+   to Hermes, except adapter-local session control utterances.
 2. Return Hermes's final text response to Home Assistant for TTS playback on Voice PE.
 3. Preserve multi-turn context across immediate follow-ups and later wake words,
    including Hermes tool calls and tool outputs.
@@ -304,7 +305,7 @@ The exact API URL depends on Docker network mode and Hermes bind address. Do not
 - Setup validates Hermes liveness.
 - A typed Assist message reaches `/v1/responses` and returns speech.
 - A Voice PE transcript reaches Hermes and is spoken through Voice PE.
-- Two turns with the same Home Assistant conversation ID retain Hermes context.
+- Turns inside the same working session retain Hermes context.
 - Previous Hermes tool calls remain available on follow-up turns.
 - The control marker is never spoken.
 - The session marker is never spoken.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import asyncio
 import importlib.util
 import itertools
 from pathlib import Path
@@ -21,6 +22,7 @@ session_policy = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = session_policy
 SPEC.loader.exec_module(session_policy)
 SessionPolicy = session_policy.SessionPolicy
+ScopeLockPool = session_policy.ScopeLockPool
 parse_session_directive = session_policy.parse_session_directive
 
 
@@ -164,6 +166,44 @@ class SessionPolicyTests(unittest.TestCase):
 
         self.assertEqual(cleaned, "好，先準備材料。")
         self.assertEqual(decision.conversation_name, continued.conversation_name)
+
+    def test_malformed_agent_session_marker_is_stripped_but_not_applied(self) -> None:
+        cleaned, directive = parse_session_directive(
+            "完成。<ha_session>keep</ha_session>"
+        )
+
+        self.assertEqual(cleaned, "完成。")
+        self.assertIsNone(directive)
+
+
+class ScopeLockPoolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_same_scope_requests_are_serialized(self) -> None:
+        pool = ScopeLockPool()
+        events = []
+        first_entered = asyncio.Event()
+        release_first = asyncio.Event()
+
+        async def first_request() -> None:
+            async with pool.for_scope("user:ben"):
+                events.append("first-enter")
+                first_entered.set()
+                await release_first.wait()
+                events.append("first-exit")
+
+        async def second_request() -> None:
+            await first_entered.wait()
+            async with pool.for_scope("user:ben"):
+                events.append("second-enter")
+
+        first = asyncio.create_task(first_request())
+        second = asyncio.create_task(second_request())
+        await first_entered.wait()
+        await asyncio.sleep(0)
+        self.assertEqual(events, ["first-enter"])
+
+        release_first.set()
+        await asyncio.gather(first, second)
+        self.assertEqual(events, ["first-enter", "first-exit", "second-enter"])
 
 
 if __name__ == "__main__":
