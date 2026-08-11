@@ -16,7 +16,8 @@ Initial deployment:
 
 1. Forward every final STT transcript from a selected Home Assistant Assist pipeline to Hermes.
 2. Return Hermes's final text response to Home Assistant for TTS playback on Voice PE.
-3. Preserve multi-turn context, including Hermes tool calls and tool outputs.
+3. Preserve multi-turn context across immediate follow-ups and later wake words,
+   including Hermes tool calls and tool outputs.
 4. Keep the Home Assistant integration thin; reasoning, tools, skills, and memory remain in Hermes.
 5. Avoid exposing the Hermes API to the public Internet.
 6. Keep Home Assistant configuration portable between macOS and Raspberry Pi.
@@ -110,9 +111,9 @@ The adapter shall:
 
 1. Implement a Home Assistant `ConversationEntity`.
 2. Receive `ConversationInput.text`.
-3. Reuse `ConversationInput.conversation_id` when present.
-4. Generate a UUID when no Home Assistant conversation ID is supplied.
-5. Build the Hermes named conversation as `home-assistant:<conversation_id>`.
+3. Resolve a stable scope from Home Assistant user, satellite, or device identity.
+4. Map short Home Assistant interactions onto a persisted working session.
+5. Build an opaque Hermes named conversation scoped to the integration and user.
 6. Authenticate using `Authorization: Bearer <API_SERVER_KEY>`.
 7. Call `POST /v1/responses`.
 8. Send only the current transcript as `input`.
@@ -132,7 +133,7 @@ The adapter shall:
 POST /v1/responses
 Authorization: Bearer <API_SERVER_KEY>
 Content-Type: application/json
-X-Hermes-Session-Key: home-assistant:<integration-entry-id>
+X-Hermes-Session-Key: home-assistant:<integration-entry-id>:<scope-hash>
 ```
 
 Example body:
@@ -142,13 +143,13 @@ Example body:
   "model": "hermes-agent",
   "input": "幫我睇下聽日天氣。",
   "instructions": "You are replying through a Home Assistant voice assistant...",
-  "conversation": "home-assistant:ha-conversation-id",
+  "conversation": "home-assistant:entry-id:scope-hash:session-uuid",
   "store": true,
   "stream": false
 }
 ```
 
-The `conversation` value controls short-term transcript continuity. `X-Hermes-Session-Key` is a separate stable scope used by Hermes long-term-memory providers and must not be confused with the conversation chain.
+The `conversation` value controls working transcript continuity. `X-Hermes-Session-Key` is a separate stable, opaque scope used by Hermes long-term-memory providers and must not be confused with the conversation chain.
 
 ## 10. Response contract
 
@@ -193,13 +194,27 @@ Spoken result:
 
 ## 11. Session rules
 
-- Same Home Assistant `conversation_id` means the same Hermes named conversation.
-- Missing Home Assistant ID creates a new UUID.
-- The adapter must not infer continuity from device ID or elapsed time alone.
-- Hermes owns and reconstructs the stored transcript, tool calls, and tool results.
-- Home Assistant chat log is used for UI consistency, not as Hermes's primary memory store.
-- The adapter does not need a local `previous_response_id` database for the MVP.
-- A new wake-word activation may receive a new Home Assistant conversation ID; the adapter follows Home Assistant's ID rather than guessing.
+There are three separate continuity mechanisms:
+
+1. `<ha_continue>` controls whether Assist immediately reopens the microphone.
+2. A persisted working session selects the Hermes named conversation across wake words.
+3. Hermes durable memory stores only explicit memories and stable preferences.
+
+Working-session rules:
+
+- Scope priority is Home Assistant user, then satellite, then device, then a default scope.
+- A normal session remains active for 10 minutes after the latest turn.
+- A pinned cooking, guided, or research session remains active for 2 hours.
+- Expiry starts a new named conversation while retaining the previous one for resume.
+- `開始新話題` / `新話題` starts a fresh normal session.
+- `繼續頭先` / `繼續之前個話題` restores the previous session.
+- `結束呢個話題` / `結束對話` closes the active session.
+- `開始研究模式` and `開始煮餸模式` start a fresh pinned session.
+- Hermes may return a non-spoken `<ha_session>pin|release|unchanged</ha_session>`
+  directive for naturally phrased multi-step tasks.
+- The routing map is persisted in Home Assistant storage and survives restarts.
+- Hermes remains the owner of transcript, tool-call, and tool-result contents.
+- Home Assistant chat log remains for UI consistency, not primary memory storage.
 
 ## 12. Continue modes
 
@@ -292,7 +307,13 @@ The exact API URL depends on Docker network mode and Hermes bind address. Do not
 - Two turns with the same Home Assistant conversation ID retain Hermes context.
 - Previous Hermes tool calls remain available on follow-up turns.
 - The control marker is never spoken.
+- The session marker is never spoken.
 - Function-call output items are never accidentally read aloud.
+- A second wake word within 10 minutes resumes the same working session.
+- A normal session expires after 10 minutes and can be restored with `繼續頭先`.
+- A pinned cooking or research session remains active for up to 2 hours.
+- Session routing survives a Home Assistant restart.
+- Hermes can use Home Assistant, web search, and durable memory tools from the API profile.
 - Restarting Home Assistant does not delete its configuration.
 - Migration to Raspberry Pi requires only host/network endpoint adjustments and native Hermes reinstallation.
 
@@ -301,7 +322,7 @@ The exact API URL depends on Docker network mode and Hermes bind address. Do not
 1. Add Home Assistant control tools with an explicit allowlist.
 2. Add Hermes Runs API support for long tasks, SSE progress, cancellation, and approvals.
 3. Add streaming response support.
-4. Add configurable stable memory scope for multiple people or rooms.
+4. Add speaker identification for true multi-person memory scopes.
 5. Add automated Home Assistant integration tests.
 6. Add detailed health and latency sensors.
-7. Add session reset and conversation deletion controls.
+7. Add a UI for changing session timeouts and deleting stored response chains.

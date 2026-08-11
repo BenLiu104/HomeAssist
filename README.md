@@ -10,7 +10,9 @@ This integration uses Hermes's built-in API Server and its stateful OpenAI Respo
 POST /v1/responses
 ```
 
-Home Assistant's `conversation_id` is sent as Hermes's named `conversation` value. Hermes then automatically chains each new turn to the latest stored response in that named conversation, including previous tool calls and tool results.
+The integration maps short Home Assistant interactions onto a persisted Hermes
+working session. Hermes automatically chains each turn in that named
+conversation, including previous tool calls and tool results.
 
 `POST /v1/chat/completions` is deliberately not used for the voice pipeline because that endpoint is stateless and requires the client to resend the full `messages` history on every request.
 
@@ -25,7 +27,7 @@ Home Assistant Assist Pipeline
         ▼
 Hermes Conversation integration
         │ POST /v1/responses
-        │ conversation=home-assistant:<HA conversation_id>
+        │ persisted working-session name
         ▼
 Hermes Agent API Server
         │ cloud LLM + tools + memory + skills
@@ -135,26 +137,44 @@ Every final STT transcript sent through that pipeline is forwarded to Hermes.
 
 ## 4. Conversation state
 
-The adapter follows this rule:
+Immediate listening, working context, and permanent memory are intentionally
+separate:
 
 ```text
-HA conversation_id
-        ↓
-Hermes named conversation:
-home-assistant:<HA conversation_id>
+<ha_continue>       → reopen the microphone now
+working session     → remember the current topic across wake words
+Hermes memory tools → explicit memories and stable preferences
 ```
 
-A missing Home Assistant ID produces a new UUID. Follow-up turns retaining the same Home Assistant ID use the same Hermes named conversation.
+Normal working sessions remain active for 10 minutes. Research and cooking
+sessions remain active for 2 hours. The routing state is saved under Home
+Assistant's `.storage` directory and survives a restart.
+
+Voice controls:
+
+```text
+開始新話題
+繼續頭先
+結束呢個話題
+開始研究模式：幫我比較三款焗爐
+開始煮餸模式：逐步教我整法式洋蔥湯
+```
 
 Hermes's Responses API stores the complete response chain server-side, including tool calls and tool outputs. The adapter therefore sends only the current transcript instead of duplicating the full history.
 
 The header:
 
 ```text
-X-Hermes-Session-Key: home-assistant:<integration-entry-id>
+X-Hermes-Session-Key: home-assistant:<integration-entry-id>:<scope-hash>
 ```
 
-provides a stable long-term-memory scope for the integration. It is separate from the transcript conversation chain and must not be treated as the multi-turn conversation identifier.
+provides a stable, opaque long-term-memory-provider scope per known HA user or
+device. It is separate from the transcript conversation chain.
+
+Hermes durable memory is deliberately conservative: it should write only when
+the user explicitly says to remember or forget something, or when a preference
+is clearly stable. Secrets, temporary research state, and recipe steps stay out
+of durable memory.
 
 ## 5. Continue listening
 
@@ -221,6 +241,9 @@ Implemented:
 - Stateful `/v1/responses` calls.
 - Named conversation continuity.
 - Stable long-term-memory scope header.
+- Cross-wake working sessions with 10-minute normal and 2-hour pinned timeouts.
+- Voice commands for new, resume, close, research, and cooking sessions.
+- Home Assistant storage persistence for session routing.
 - Bearer authentication.
 - Configurable timeout.
 - Continue-conversation parsing.
