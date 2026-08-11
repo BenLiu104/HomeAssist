@@ -22,6 +22,8 @@ Initial deployment:
 4. Keep the Home Assistant integration thin; reasoning, tools, skills, and memory remain in Hermes.
 5. Avoid exposing the Hermes API to the public Internet.
 6. Keep Home Assistant configuration portable between macOS and Raspberry Pi.
+7. Keep spoken output concise and safe for a voice-only interface while allowing
+   deliberately enabled Home Assistant, web-research, and memory tools.
 
 ## 3. Non-goals for MVP
 
@@ -94,6 +96,9 @@ Hermes shall:
 - Persist the Responses API chain for each named conversation.
 - Return structured Responses API output items.
 - Return one final user-facing assistant message.
+- Keep the Home Assistant profile tool allowlist separate from the adapter.
+  The intended profile allows Home Assistant, web, and memory tools; it does
+  not require terminal, file-system, or browser-automation tools.
 - Follow the adapter instruction to append exactly one non-spoken marker:
 
 ```xml
@@ -127,6 +132,8 @@ The adapter shall:
 15. Return the same Home Assistant conversation ID.
 16. Set `continue_conversation` from the explicit marker or configured fallback.
 17. Surface timeout, authentication, connection, and malformed-response errors safely.
+18. Serialize same-scope requests so two overlapping utterances cannot reorder
+    the persisted Hermes conversation chain.
 
 ## 9. Request contract
 
@@ -245,6 +252,13 @@ Always return `continue_conversation=false`.
 - The adapter must impose a timeout.
 - Logs must not print bearer tokens.
 - The API Server exposes Hermes's full toolset, including terminal operations; possession of the API key is highly privileged.
+- The Home Assistant Hermes profile shall enable only its required tools:
+  Home Assistant, web research, and durable memory. Its tool configuration and
+  SOUL prompt are external profile data, not custom-component configuration.
+- Web pages and all tool results are untrusted data. Only the user's direct
+  utterance may authorize a Home Assistant action or a durable-memory write.
+- A web-search provider key (such as Tavily) belongs in the private Hermes
+  profile environment and must not be committed.
 
 ## 14. Configuration fields
 
@@ -258,14 +272,35 @@ Always return `continue_conversation=false`.
 
 A bare `model` value sent to OpenAI-compatible endpoints may be ignored unless Hermes direct model requests are enabled or a configured model route matches. Explicit `provider` and model-routing support are outside the MVP configuration UI.
 
-## 15. Health checks
+## 15. TTS runtime configuration
+
+STT and TTS providers are Home Assistant runtime configuration, not code owned
+by this custom component. The current deployment uses SenseVoice through a
+Wyoming endpoint for Cantonese STT and optionally uses the community Edge TTS
+integration for output.
+
+```text
+config/custom_components/edge_tts/     # local, ignored by Git
+Voice: zh-HK-HiuMaanNeural
+Rate: +25%
+```
+
+The Assist pipeline selects the Edge TTS engine and language. The Edge TTS
+integration's options select the neural voice and rate. The local component
+has a small extension that adds a persisted `rate` option; manual replacement
+or upgrade of that community component may require reapplying the extension.
+
+Edge TTS uses Microsoft-hosted synthesis. It does not need an API key, but it
+is not local-only and requires Internet access.
+
+## 16. Health checks
 
 - `GET /health` is the cheap public liveness check and returns `{"status":"ok"}`.
 - `GET /v1/health` is an alias for OpenAI-compatible clients.
 - `GET /health/detailed` is the authenticated readiness check.
 - Setup validation may use `/health`; future diagnostics should use `/health/detailed`.
 
-## 16. Error behavior
+## 17. Error behavior
 
 | Failure | User-facing behavior |
 |---|---|
@@ -276,7 +311,7 @@ A bare `model` value sent to OpenAI-compatible endpoints may be ignored unless H
 | Missing `output` | Spoken invalid-response error |
 | No assistant `output_text` | Spoken empty/invalid-response error |
 
-## 17. Deployment
+## 18. Deployment
 
 ### macOS MVP
 
@@ -299,7 +334,7 @@ Raspberry Pi OS 64-bit
 
 The exact API URL depends on Docker network mode and Hermes bind address. Do not assume that `127.0.0.1` inside a bridged container means the Linux host.
 
-## 18. Acceptance criteria
+## 19. Acceptance criteria
 
 - The custom integration appears in Add Integration.
 - Setup validates Hermes liveness.
@@ -315,15 +350,22 @@ The exact API URL depends on Docker network mode and Hermes bind address. Do not
 - A pinned cooking or research session remains active for up to 2 hours.
 - Session routing survives a Home Assistant restart.
 - Hermes can use Home Assistant, web search, and durable memory tools from the API profile.
+- The voice response contains no reasoning, tool traces, `<ha_session>`, or
+  `<ha_continue>` markers.
+- A configured Edge TTS engine can generate Cantonese output at the selected
+  integration voice and rate.
 - Restarting Home Assistant does not delete its configuration.
 - Migration to Raspberry Pi requires only host/network endpoint adjustments and native Hermes reinstallation.
 
-## 19. Future phases
+## 20. Future phases
 
-1. Add Home Assistant control tools with an explicit allowlist.
+1. Add an adapter-owned Home Assistant entity allowlist and action policy.
 2. Add Hermes Runs API support for long tasks, SSE progress, cancellation, and approvals.
 3. Add streaming response support.
 4. Add speaker identification for true multi-person memory scopes.
 5. Add automated Home Assistant integration tests.
 6. Add detailed health and latency sensors.
 7. Add a UI for changing session timeouts and deleting stored response chains.
+8. Add a separately scoped remote-control profile over Tailscale, with ACLs,
+   sender allowlists, and confirmation for sensitive actions. Do not expose the
+   Home Assistant or Hermes API directly to the public Internet.
