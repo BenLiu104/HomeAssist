@@ -96,6 +96,7 @@ Keep the bearer key enabled, do not port-forward 8642 on the router, and leave C
 cp .env.example .env
 mkdir -p config/custom_components
 cp -R custom_components/hermes_conversation config/custom_components/
+cp -R custom_components/edge_tts config/custom_components/
 docker compose up -d
 ```
 
@@ -235,19 +236,25 @@ logger:
     custom_components.hermes_conversation: debug
 ```
 
-## 8. Optional Edge TTS for Cantonese voice output
+## 8. Edge TTS for Cantonese voice output
 
-The Assist pipeline can use any Home Assistant TTS provider. The current
-runtime deployment uses the community [Edge TTS integration](https://github.com/hasscc/hass-edge-tts), installed under:
+The Assist pipeline can use any Home Assistant TTS provider. This repository
+vendors a locally modified copy of the community
+[Edge TTS integration](https://github.com/hasscc/hass-edge-tts) (upstream
+version `0.7.7`) under:
 
 ```text
-config/custom_components/edge_tts/
+custom_components/edge_tts/
 ```
 
-That directory is ignored by Git, so it is a local Home Assistant deployment
-detail rather than code shipped by this repository. After adding the
-integration in Home Assistant, select its generated TTS engine in the Assist
-pipeline. A working Cantonese example is:
+Deploy it the same way as the Hermes component:
+
+```bash
+cp -R custom_components/edge_tts config/custom_components/
+```
+
+After adding the integration in Home Assistant, select its generated TTS engine
+in the Assist pipeline. A working Cantonese example is:
 
 ```text
 Voice: zh-HK-HiuMaanNeural
@@ -255,12 +262,57 @@ Rate: +25%
 ```
 
 The standard Assist-pipeline screen selects the TTS engine and language; the
-voice and rate are integration options. The local Edge TTS component has been
-extended to expose and persist a `rate` option. Reapply that small local change
-if the community component is manually replaced or upgraded.
+voice and rate are integration options.
+
+### Local modifications to the vendored component
+
+These changes are already applied in `custom_components/edge_tts/` and must be
+reapplied if the component is upgraded from upstream:
+
+1. A persisted `rate` option, exposed through the config flow.
+2. Chunk-by-chunk streaming synthesis. `_async_stream_edge_tts()` yields each
+   mp3 chunk as edge-tts produces it instead of accumulating the whole
+   utterance, which lowers time-to-first-audio.
+3. A reusable HTTP connector (`_ReusableConnector`). edge-tts opens a fresh
+   `ClientSession` per synthesis and closes it when done, which would also
+   close the connector it was given. Overriding `close()` keeps the DNS cache
+   and TLS session pool alive across requests.
+
+Modifications 2 and 3 exist because the Voice PE firmware waits only two
+seconds for playback to start before it reopens the microphone. Measured
+time-to-first-audio improved from an unstable 0.9-3.9 s (cold connections
+regularly exceeding the budget) to a stable 1.4-1.8 s. See
+[Voice PE follow-up listening race](#voice-pe-follow-up-listening-race) for why
+this mitigates but does not fix the underlying problem.
 
 Edge TTS contacts Microsoft services to synthesize speech. It needs no API key,
 but it is not a local-only TTS provider and requires Internet access.
+
+### Voice PE follow-up listening race
+
+Home Assistant Voice PE firmware `26.6.0` (ESPHome `2026.6.0`) can start
+follow-up listening before its own spoken response begins playing, so the
+device transcribes its own speaker output as the next user turn.
+
+The cause is in ESPHome's `voice_assistant` component, not in this repository.
+`start_playback_timeout_()` arms a hard 2000 ms timer when the TTS URL is handed
+to the media player, and treats "no playback yet after 2 s" as "the announcement
+finished". It then sends `VoiceAssistantAnnounceFinished`, Home Assistant calls
+`tts_response_finished()`, the satellite leaves `RESPONDING`, and follow-up
+listening opens the microphone before the first audio frame is emitted.
+`RESPONSE_FINISHED` also transitions to `START_MICROPHONE` without checking the
+media player state. Recorded failures showed `responding` to `idle` taking
+2.077 s and 2.108 s regardless of response length, matching the fixed timer.
+
+Upstream tracking: [voice-pe#621](https://github.com/esphome/home-assistant-voice-pe/issues/621),
+[voice-pe#563](https://github.com/esphome/home-assistant-voice-pe/issues/563),
+partial fix in [esphome#16512](https://github.com/esphome/esphome/pull/16512)
+(unmerged). No released firmware contains a fix.
+
+Reducing time-to-first-audio narrows the race but cannot close it, because the
+budget depends on variable cloud latency. The deployed mitigation is therefore
+`continue_mode: never` on the Hermes integration, which disables automatic
+follow-up listening entirely; every turn needs the "Hey Jarvis" wake word.
 
 ## 9. Migrate to Raspberry Pi
 
@@ -305,7 +357,8 @@ Implemented:
 - Traditional Chinese and English UI strings.
 - Profile-side Home Assistant, web-search, and durable-memory tools, with a
   voice-focused trust boundary.
-- Optional Edge TTS runtime deployment for Cantonese speech.
+- Vendored Edge TTS component for Cantonese speech, with streaming synthesis and
+  a reusable HTTP connector for lower time-to-first-audio.
 
 Not yet implemented:
 

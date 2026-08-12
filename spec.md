@@ -241,6 +241,13 @@ Always return `continue_conversation=true`. Testing only.
 
 Always return `continue_conversation=false`.
 
+This is the currently deployed mode. Automatic follow-up listening is disabled
+because Voice PE firmware `26.6.0` can open the microphone before its own
+response starts playing, causing the device to transcribe its own speaker
+output as the next user turn. Every turn therefore needs the wake word. See the
+README section "Voice PE follow-up listening race" for the upstream cause and
+tracking issues.
+
 ## 13. Security requirements
 
 - Hermes API key must never be committed.
@@ -268,7 +275,7 @@ Always return `continue_conversation=false`.
 | API key | none | Required Hermes bearer token |
 | Model | `hermes-agent` | Advertised Hermes profile/model name |
 | Timeout | `180` | Maximum request duration in seconds |
-| Continue mode | `auto` | `auto`, `always`, or `never` |
+| Continue mode | `auto` | `auto`, `always`, or `never`; deployed as `never`, see section 12 |
 
 A bare `model` value sent to OpenAI-compatible endpoints may be ignored unless Hermes direct model requests are enabled or a configured model route matches. Explicit `provider` and model-routing support are outside the MVP configuration UI.
 
@@ -276,19 +283,21 @@ A bare `model` value sent to OpenAI-compatible endpoints may be ignored unless H
 
 STT and TTS providers are Home Assistant runtime configuration, not code owned
 by this custom component. The current deployment uses SenseVoice through a
-Wyoming endpoint for Cantonese STT and optionally uses the community Edge TTS
-integration for output.
+Wyoming endpoint for Cantonese STT and the Edge TTS integration for output.
 
 ```text
-config/custom_components/edge_tts/     # local, ignored by Git
+custom_components/edge_tts/           # vendored in this repository
+config/custom_components/edge_tts/    # deployed copy, ignored by Git
 Voice: zh-HK-HiuMaanNeural
 Rate: +25%
 ```
 
 The Assist pipeline selects the Edge TTS engine and language. The Edge TTS
-integration's options select the neural voice and rate. The local component
-has a small extension that adds a persisted `rate` option; manual replacement
-or upgrade of that community component may require reapplying the extension.
+integration's options select the neural voice and rate. This repository vendors
+a modified copy of the upstream community component; its local changes are a
+persisted `rate` option, chunk-by-chunk streaming synthesis, and a reusable HTTP
+connector. Upgrading from upstream requires reapplying them. The README
+documents each change and why it exists.
 
 Edge TTS uses Microsoft-hosted synthesis. It does not need an API key, but it
 is not local-only and requires Internet access.
